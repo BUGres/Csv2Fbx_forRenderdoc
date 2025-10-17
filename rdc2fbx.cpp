@@ -5,205 +5,202 @@
 #include <string>
 #include <fbxsdk.h>
 #include <cstdlib>
+#include <filesystem>
 
+namespace fs = std::filesystem;
 using namespace std;
 
-int POS = 0;
-int UV = 0;
-
-// 定义一个结构体来存储三角形的顶点和UV坐标
-struct TriangleData
-{
-    FbxVector4 vertices[3]; // 顶点坐标
-    FbxVector2 uv[3]; // UV坐标
+// 定义顶点结构
+struct Vertex {
+    int index; // 控制点索引
+    FbxVector4 position; // 位置
+    FbxVector4 normal; // 法线
+    FbxVector2 uv; // UV
 };
 
-// 手动生成三角形数据
-void GenerateTriangles(std::vector<TriangleData>& triangles)
-{
-    // 打开文件
-    auto filename = "model.txt";
-    std::ifstream file(filename);
-    if (!file.is_open())
-    {
-        std::cerr << "Failed to open file: " << filename << std::endl;
+// 创建FBX文件
+void CreateFbxFile(const std::string& filename, const std::vector<Vertex>& vertices) {
+    // 初始化FBX SDK
+    FbxManager* lSdkManager = FbxManager::Create();
+    if (!lSdkManager) {
+        std::cerr << "无法创建FBX SDK管理器" << std::endl;
         return;
     }
 
-    // 逐行读取文件内容
+    // 创建IO设置
+    FbxIOSettings* ios = FbxIOSettings::Create(lSdkManager, IOSROOT);
+    lSdkManager->SetIOSettings(ios);
+
+    // 创建场景
+    FbxScene* lScene = FbxScene::Create(lSdkManager, "MyScene");
+
+    // 创建网格
+    FbxMesh* lMesh = FbxMesh::Create(lScene, "MyMesh");
+
+    // 初始化控制点
+    int numVertices = vertices.size();
+    lMesh->InitControlPoints(numVertices);
+
+    // 设置控制点位置
+    FbxVector4* lControlPoints = lMesh->GetControlPoints();
+    for (size_t i = 0; i < numVertices; ++i) {
+        lControlPoints[i] = vertices[i].position;
+    }
+
+    // 添加多边形
+    for (size_t i = 0; i + 2 < numVertices; i += 3) {
+        lMesh->BeginPolygon(-1, -1, false);
+        lMesh->AddPolygon(i);
+        lMesh->AddPolygon(i + 1);
+        lMesh->AddPolygon(i + 2);
+        lMesh->EndPolygon();
+    }
+
+    // 添加法线
+    FbxGeometryElementNormal* lNormalElement = lMesh->CreateElementNormal();
+    lNormalElement->SetMappingMode(FbxGeometryElement::eByControlPoint);
+    lNormalElement->SetReferenceMode(FbxGeometryElement::eDirect);
+
+    for (const auto& vertex : vertices) {
+        lNormalElement->GetDirectArray().Add(vertex.normal);
+    }
+
+    // 添加UV
+    FbxGeometryElementUV* lUVElement = lMesh->CreateElementUV("defaultUV");
+    lUVElement->SetMappingMode(FbxGeometryElement::eByControlPoint);
+    lUVElement->SetReferenceMode(FbxGeometryElement::eDirect);
+
+    for (const auto& vertex : vertices) {
+        lUVElement->GetDirectArray().Add(vertex.uv);
+    }
+
+    // 创建节点并将网格添加到节点中
+    FbxNode* node = FbxNode::Create(lScene, "MyMeshNode");
+    node->SetNodeAttribute(lMesh);
+    lScene->GetRootNode()->AddChild(node);
+
+    // 保存场景到文件
+    FbxExporter* lExporter = FbxExporter::Create(lSdkManager, "");
+    if (!lExporter->Initialize("tmp", -1, lSdkManager->GetIOSettings())) {
+        std::cerr << "无法初始化FBX导出器: " << lExporter->GetStatus().GetErrorString() << std::endl;
+        return;
+    }
+
+    lExporter->Export(lScene);
+    lExporter->Destroy();
+
+    // 销毁场景和管理器
+    lScene->Destroy();
+    lSdkManager->Destroy();
+
+    std::remove(filename.c_str());
+    std::rename("tmp.fbx", filename.c_str());
+}
+
+std::vector<std::vector<std::string>> readCSV(const std::string& filename) {
+    std::vector<std::vector<std::string>> data;
+    std::ifstream file(filename);
     std::string line;
-    int vcount = 0;
-    float* vertex0 = new float[50];
-    float* vertex1 = new float[50];
-    while (std::getline(file, line))
-    {
-        float* list = new float[50];
-        int listIndex = 0;
-        int last = 0;
-        for (int i = 0; i < line.length(); i++)
-        {
-            if (line[i] == '\t' || line[i] == '\n' || i == line.length() - 1)
-            {
-                string substr = line.substr(last, i - last);
-                if (i == line.length() - 1)substr = line.substr(last, i - last + 1);
-                list[listIndex++] = 100 * std::atof(substr.c_str());
-                last = i + 1;
-            }
+
+    while (std::getline(file, line)) {
+        std::vector<std::string> row;
+        std::stringstream ss(line);
+        std::string cell;
+        while (std::getline(ss, cell, ',')) {
+            row.push_back(cell);
         }
 
-        if (vcount % 3 == 2)
-        {
-            TriangleData* t = new TriangleData();
-
-            t->vertices[0] = FbxVector4(vertex0[POS], vertex0[POS + 1], vertex0[POS + 2]); // 顶点0
-            t->vertices[1] = FbxVector4(vertex1[POS], vertex1[POS + 1], vertex1[POS + 2]);  // 顶点1
-            t->vertices[2] = FbxVector4(list[POS], list[POS + 1], list[POS + 2]);  // 顶点2
-
-            t->uv[0] = FbxVector2(vertex0[UV] / 100, vertex0[UV + 1] / 100); // UV0
-            t->uv[1] = FbxVector2(vertex1[UV] / 100, vertex1[UV + 1] / 100); // UV1
-            t->uv[2] = FbxVector2(list[UV] / 100, list[UV + 1] / 100); // UV2
-
-            triangles.push_back(*t);
-        }
-        else if (vcount % 3 == 1)
-        {
-            vertex1 = list;
-        }
-        else
-        {
-            vertex0 = list;
-        }
-
-        vcount++;
-        if (vcount % 10000 == 0) std::cout << vcount << " vertex" << endl;
-    }
-}
-
-// 创建FBX网格并添加到场景中
-void CreateFbxMesh(FbxScene* scene, const std::vector<TriangleData>& triangles)
-{
-    // 创建一个网格节点
-    FbxNode* node = FbxNode::Create(scene, "MyMeshNode");
-    FbxMesh* mesh = FbxMesh::Create(scene, "MyMesh");
-    node->SetNodeAttribute(mesh);
-    scene->GetRootNode()->AddChild(node);
-
-    // 初始化控制点数组
-    int totalVertices = 0;
-    for (const auto& triangle : triangles)
-    {
-        totalVertices += 3;
-    }
-    mesh->InitControlPoints(totalVertices);
-    FbxVector4* controlPoints = mesh->GetControlPoints();
-
-    // 添加控制点
-    int vertexIndex = 0;
-    for (const auto& triangle : triangles)
-    {
-        for (int i = 0; i < 3; ++i)
-        {
-            controlPoints[vertexIndex++] = triangle.vertices[i];
-        }
+        data.push_back(row);
     }
 
-    // 添加多边形（三角形）
-    int indices = 0;
-    for (const auto& triangle : triangles)
-    {
-        mesh->BeginPolygon();
-        for (int i = 0; i < 3; ++i)
-        {
-            mesh->AddPolygon(indices++);
-        }
-        mesh->EndPolygon();
-    }
-
-    // 添加UV层
-    FbxLayer* layer = mesh->GetLayer(0);
-    if (!layer)
-    {
-        mesh->CreateLayer();
-        layer = mesh->GetLayer(0);
-    }
-
-    FbxLayerElementUV* uvLayer = FbxLayerElementUV::Create(mesh, "UV");
-    uvLayer->SetMappingMode(FbxLayerElement::eByPolygonVertex);
-    uvLayer->SetReferenceMode(FbxLayerElement::eDirect);
-
-    int polygonCount = mesh->GetPolygonCount();
-    int polygonVertexIndex = 0;
-    for (int i = 0; i < polygonCount; ++i)
-    {
-        for (int j = 0; j < 3; ++j)
-        {
-            uvLayer->GetDirectArray().Add(triangles[i].uv[j]);
-        }
-    }
-
-    layer->SetUVs(uvLayer);
-}
-
-int StringToInt(const std::string& str)
-{
-    try
-    {
-        return std::stoi(str);
-    }
-    catch (const std::invalid_argument& e)
-    {
-        std::cerr << "Invalid argument: " << e.what() << std::endl;
-        return -1;
-    }
-    catch (const std::out_of_range& e)
-    {
-        std::cerr << "Out of range: " << e.what() << std::endl;
-        return -1;
-    }
+    return data;
 }
 
 int main(int argc, char* argv[])
 {
-    POS = StringToInt(argv[1]);
-    UV = StringToInt(argv[2]);
+    //std::vector<Vertex> vertices = {
+    //{0, FbxVector4(-1.0f, -1.0f, 0.0f), FbxVector4(0.0f, 0.0f, 1.0f), FbxVector2(0.0f, 0.0f)},
+    //{1, FbxVector4(1.0f, -1.0f, 0.0f), FbxVector4(0.0f, 0.0f, 1.0f), FbxVector2(1.0f, 0.0f)},
+    //{2, FbxVector4(0.0f, 1.0f, 0.0f), FbxVector4(0.0f, 0.0f, 1.0f), FbxVector2(0.5f, 1.0f)}
+    //};
+    //CreateFbxFile("test", vertices);
+    //return 0;
 
-    // 初始化FBX SDK管理器
-    FbxManager* manager = FbxManager::Create();
-    FbxIOSettings* ioSettings = FbxIOSettings::Create(manager, IOSROOT);
-    manager->SetIOSettings(ioSettings);
+    cout << "将处理从RenderDoc导出的CSV文件（放在本程序同一文件夹下），将其转化为模型，请输入转换模式（a~z小写字母）并按下回车" << endl;
+    cout << "将自动检查POSITION NORMAL TEXCOORD => 位置 法线 UV，请注意顺序问题" << endl;
 
-    // 创建一个空的FBX场景
-    FbxScene* scene = FbxScene::Create(manager, "MyScene");
+    // 获取当前工作目录
+    fs::path current_path = fs::current_path();
+    int fileCount = 0;
+    for (const auto& entry : fs::directory_iterator(current_path)) {
+        // 检查文件扩展名是否为 .csv
+        if (entry.is_regular_file() && entry.path().extension() == ".csv") {
+            string csvFileName = entry.path().filename().string();
+            std::cout << "  " << ++fileCount << " " << csvFileName << std::endl;
 
-    // 手动生成三角形数据
-    std::vector<TriangleData> triangles;
-    GenerateTriangles(triangles);
+            auto csvFile = readCSV(csvFileName);
 
-    // 将三角形数据添加到FBX场景中
-    CreateFbxMesh(scene, triangles);
+            int controlIndex = 1;
+            int posIndex = -1;
+            int normalIndex = -1;
+            int uvIndex = -1;
 
-    // 保存FBX文件
-    FbxExporter* exporter = FbxExporter::Create(manager, "");
-    if (!exporter->Initialize("output.fbx", -1, manager->GetIOSettings()))
-    {
-        std::cerr << "Failed to initialize exporter." << std::endl;
-        return -1;
+            cout << "表格行数" << csvFile.size() << " 表格列数" << csvFile[0].size() << endl;
+            for (int i = 0; i < csvFile[0].size(); i++)
+            {
+                if (csvFile[0][i] == " POSITION.x")
+                {
+                    cout << "Find! " << csvFile[0][i] << " index = " << i << endl;
+                    posIndex = i;
+                }
+                else if (csvFile[0][i] == " NORMAL.x")
+                {
+                    cout << "Find! " << csvFile[0][i] << " index = " << i << endl;
+                    normalIndex = i;
+                }
+                else if (csvFile[0][i] == " TEXCOORD0.x")
+                {
+                    cout << "Find! " << csvFile[0][i] << " index = " << i << endl;
+                    uvIndex = i;
+                }
+            }
+
+            if (posIndex == -1 || normalIndex == -1 || uvIndex == -1)
+            {
+                cout << "没能全部找到POSITION NORMAL TEXCOORD，CSV的列名称中似乎没有\" POSITION.x\" \" NORMAL.x\" \" TEXCOORD0.x\"" << endl;
+                system("pause");
+                return 0;
+            }
+            else
+            {
+                cout << "index control pos normal uv => 2 " << posIndex << " " << normalIndex << " " << uvIndex << endl;
+            }
+
+            // 下面生成fbx
+            std::vector<Vertex> vstream;
+            for (int i = 1; i < csvFile.size(); i++)
+            {
+                // cout << i << endl;
+                
+                Vertex v;
+                v.index = std::stof(csvFile[i][controlIndex]);
+                v.position = FbxVector4(std::stof(csvFile[i][posIndex]) * 100, 
+                    std::stof(csvFile[i][posIndex + 1]) * 100,
+                    std::stof(csvFile[i][posIndex + 2]) * 100,
+                    0);
+                v.normal = FbxVector4(std::stof(csvFile[i][normalIndex]),
+                    std::stof(csvFile[i][normalIndex + 1]),
+                    std::stof(csvFile[i][normalIndex + 2]),
+                    0);
+                v.uv = FbxVector2(std::stof(csvFile[i][uvIndex]),
+                    std::stof(csvFile[i][uvIndex + 1]));
+                vstream.push_back(v);
+            }
+
+            CreateFbxFile(csvFileName.substr(0, csvFileName.size() - 4) + ".fbx", vstream);
+        }
     }
 
-    if (!exporter->Export(scene))
-    {
-        std::cerr << "Failed to export scene." << std::endl;
-        return -1;
-    }
-
-    exporter->Destroy();
-
-    // 清理
-    scene->Destroy();
-    manager->Destroy();
-
-    //std::cout << "FBX file saved successfully." << std::endl;
-    //std::string end;
-    //cin >> end;
+    system("pause");
     return 0;
 }
